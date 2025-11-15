@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 import chromadb
-from chromadb.config import Settings
 from PyPDF2 import PdfReader
 from docx import Document
 from dotenv import load_dotenv
@@ -126,9 +125,10 @@ async def ingest(file: UploadFile = File(...), namespace: Optional[str] = Form("
         metadatas=metadatas,
         embeddings=embeddings
     )
-    chroma_client.persist()
+    # REMOVED: chroma_client.persist()
     return {"success": True, "ingested_chunks": len(chunks), "file": file.filename}
 
+# In the query endpoint, replace the Gemini section:
 @app.post("/query")
 async def query(q: QueryIn):
     query_text = q.query
@@ -156,12 +156,31 @@ async def query(q: QueryIn):
     answer = None
     if GEMINI_API_KEY and GEMINI_AVAILABLE:
         try:
-            model = genai.GenerativeModel("gemini-1.5-pro")
-            prompt = f"You are an assistant. Use the context below to answer the question concisely.\n\nContext:\n{context}\n\nQuestion: {query_text}\n\nAnswer:"
+            # Use one of the available models - gemini-2.0-flash is fast and reliable
+            selected_model = "models/gemini-2.0-flash"
+            model = genai.GenerativeModel(selected_model)
+            
+            prompt = f"""Based on the following context, please answer the question concisely and accurately.
+
+Context:
+{context}
+
+Question: {query_text}
+
+Answer:"""
+            
             resp = model.generate_content(prompt)
             answer = resp.text.strip()
+                
         except Exception as e:
-            answer = f"(gemini error) {str(e)}"
+            # Fallback to a different model if the first one fails
+            try:
+                selected_model = "models/gemini-2.0-flash-lite"
+                model = genai.GenerativeModel(selected_model)
+                resp = model.generate_content(prompt)
+                answer = resp.text.strip()
+            except Exception as e2:
+                answer = f"(Gemini error) {str(e2)}"
     else:
         answer = "No Gemini key configured. Returning retrieved context."
 
@@ -179,7 +198,7 @@ def flush_data():
         chroma_client.delete_collection(COLLECTION_NAME)
         global collection
         collection = chroma_client.create_collection(name=COLLECTION_NAME)
-        chroma_client.persist()
+        # REMOVED: chroma_client.persist()
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
