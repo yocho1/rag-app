@@ -6,3 +6,6 @@ PyPDF2
 python-docx
 google-generativeai
 python-dotenv
+pyjwt
+sentence-transformers
+torch

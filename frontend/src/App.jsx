@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import axios from "axios";
 
-const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:5004";
+const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:5005"
 
 export default function App() {
   const [file, setFile] = useState(null);
@@ -10,36 +10,138 @@ export default function App() {
   const [answer, setAnswer] = useState(null);
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState(null);
+  const [loginData, setLoginData] = useState({ username: "" });
+  const [userDocuments, setUserDocuments] = useState(null);
+  const [showLogin, setShowLogin] = useState(true);
+
+  // Check for existing token on app start
+  useEffect(() => {
+    const token = localStorage.getItem("jwt_token");
+    if (token) {
+      axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+      fetchUserInfo();
+    }
+  }, []);
+
+  const fetchUserInfo = async () => {
+    try {
+      const response = await axios.get(`${API}/auth/me`);
+      setUser(response.data);
+      setShowLogin(false);
+      fetchUserDocuments();
+    } catch (error) {
+      localStorage.removeItem("jwt_token");
+      delete axios.defaults.headers.common["Authorization"];
+      setShowLogin(true);
+    }
+  };
+
+  const fetchUserDocuments = async () => {
+    try {
+      const response = await axios.get(`${API}/user/documents`);
+      setUserDocuments(response.data);
+    } catch (error) {
+      console.error("Failed to fetch user documents:", error);
+    }
+  };
+
+  const login = async (e) => {
+    e.preventDefault();
+    if (!loginData.username.trim()) return alert("Please enter a username");
+    
+    try {
+      const response = await axios.post(`${API}/auth/login`, {
+        username: loginData.username
+      });
+      
+      const { access_token, user_id, username } = response.data;
+      localStorage.setItem("jwt_token", access_token);
+      axios.defaults.headers.common["Authorization"] = `Bearer ${access_token}`;
+      
+      setUser({ user_id, username });
+      setShowLogin(false);
+      setLoginData({ username: "" });
+    } catch (error) {
+      alert("Login failed: " + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem("jwt_token");
+    delete axios.defaults.headers.common["Authorization"];
+    setUser(null);
+    setShowLogin(true);
+    setUserDocuments(null);
+    setAnswer(null);
+    setDocs([]);
+  };
 
   const upload = async (e) => {
     e.preventDefault();
     if (!file) return alert("Choose a file");
+    if (!user) return alert("Please login first");
+    
     setIngestStatus("Uploading...");
     const form = new FormData();
     form.append("file", file);
+    form.append("namespace", "main");
+    
     try {
       const res = await axios.post(`${API}/ingest`, form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setIngestStatus(`✅ Successfully ingested ${res.data.ingested_chunks} chunks from ${res.data.file}`);
+      setFile(null);
+      fetchUserDocuments();
     } catch (err) {
-      setIngestStatus("❌ Upload failed: " + (err?.response?.data?.error || err.message));
+      if (err.response?.status === 401) {
+        logout();
+        alert("Session expired. Please login again.");
+      } else {
+        setIngestStatus("❌ Upload failed: " + (err?.response?.data?.error || err.message));
+      }
     }
   };
 
-  const ask = async () => {
-    if (!query.trim()) return;
-    setLoading(true);
-    setAnswer(null);
-    setDocs([]);
-    try {
-      const res = await axios.post(`${API}/query`, { query, top_k: 4 });
-      setAnswer(res.data.answer);
-      setDocs(res.data.documents || []);
-    } catch (err) {
+const ask = async () => {
+  if (!query.trim()) return;
+  if (!user) return alert("Please login first");
+  
+  setLoading(true);
+  setAnswer(null);
+  setDocs([]);
+  try {
+    const res = await axios.post(`${API}/query`, { query, top_k: 4 });
+    console.log("Full response:", res); // Add this line
+    console.log("Response data:", res.data); // Add this line
+    setAnswer(res.data.answer);
+    setDocs(res.data.documents || []);
+  } catch (err) {
+    console.error("Error details:", err); // Add this line
+    if (err.response?.status === 401) {
+      logout();
+      alert("Session expired. Please login again.");
+    } else {
       setAnswer("❌ Error: " + (err?.response?.data?.error || err.message));
-    } finally {
-      setLoading(false);
+    }
+  } finally {
+    setLoading(false);
+  }
+}
+
+  const flushUserData = async () => {
+    if (!user) return;
+    if (!confirm("Are you sure you want to delete all your documents? This cannot be undone.")) return;
+    
+    try {
+      const res = await axios.post(`${API}/user/flush`);
+      alert(res.data.message);
+      setUserDocuments(null);
+      setAnswer(null);
+      setDocs([]);
+    } catch (err) {
+      alert("Failed to flush data: " + (err?.response?.data?.error || err.message));
     }
   };
 
@@ -49,22 +151,122 @@ export default function App() {
     }
   };
 
+  // Login Form
+  if (showLogin) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100 max-w-md w-full">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+              Welcome Back
+            </h1>
+            <p className="text-gray-600">Sign in to access your documents</p>
+          </div>
+
+          <form onSubmit={login} className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Username
+              </label>
+              <input
+                type="text"
+                value={loginData.username}
+                onChange={(e) => setLoginData({ username: e.target.value })}
+                className="w-full p-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Enter your username"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 px-4 rounded-xl font-semibold hover:from-blue-700 hover:to-blue-800 transition-all"
+            >
+              Sign In
+            </button>
+          </form>
+
+          <div className="mt-6 text-center text-sm text-gray-500">
+            <p>Don't have an account? Just enter a username to get started!</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Main App
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 p-4 md:p-6">
       {/* Header */}
       <div className="max-w-6xl mx-auto">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-4">
-            Smart Document Assistant
-          </h1>
-          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Upload your documents and ask questions. Powered by AI and semantic search.
-          </p>
+        <div className="flex justify-between items-center mb-8">
+          <div>
+            <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+              Smart Document Assistant
+            </h1>
+            <p className="text-lg text-gray-600">
+              Welcome back, <span className="font-semibold text-blue-600">{user?.username}</span>!
+            </p>
+          </div>
+          <div className="flex items-center gap-4">
+            {userDocuments && (
+              <div className="text-right">
+                <p className="text-sm text-gray-600">
+                  {userDocuments.total_documents} documents • {userDocuments.total_chunks} chunks
+                </p>
+              </div>
+            )}
+            <button
+              onClick={logout}
+              className="bg-red-500 text-white px-4 py-2 rounded-xl font-semibold hover:bg-red-600 transition-colors"
+            >
+              Logout
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           {/* Left Column - Input Section */}
           <div className="space-y-6">
+            {/* User Documents Card */}
+            <div className="bg-white rounded-2xl shadow-xl p-6 border border-gray-100">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-green-100 rounded-lg">
+                    <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                  <h2 className="text-xl font-semibold text-gray-800">Your Documents</h2>
+                </div>
+                <button
+                  onClick={flushUserData}
+                  className="text-sm bg-red-100 text-red-600 px-3 py-1 rounded-lg hover:bg-red-200 transition-colors"
+                >
+                  Clear All
+                </button>
+              </div>
+
+              <div className="max-h-60 overflow-y-auto">
+                {userDocuments?.documents ? (
+                  Object.entries(userDocuments.documents).map(([source, info]) => (
+                    <div key={source} className="p-3 border border-gray-200 rounded-lg mb-2 bg-gray-50">
+                      <div className="flex justify-between items-center">
+                        <span className="font-medium text-sm text-gray-800 truncate">{source}</span>
+                        <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                          {info.chunks} chunks
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-center py-4 text-gray-400">
+                    <p>No documents uploaded yet</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* File Upload Card */}
             <div className="bg-white rounded-2xl shadow-xl p-6 border border-gray-100">
               <div className="flex items-center gap-3 mb-4">
@@ -92,7 +294,7 @@ export default function App() {
                     <p className="text-gray-600 mb-2">
                       {file ? file.name : "Choose PDF, DOCX, or TXT file"}
                     </p>
-                    <p className="text-sm text-gray-500">Max file size: 10MB</p>
+                    <p className="text-sm text-gray-500">Max file size: 50MB</p>
                   </label>
                 </div>
                 
@@ -245,24 +447,22 @@ export default function App() {
         </div>
 
         {/* Footer */}
-       {/* Footer */}
-{/* Footer */}
-<div className="text-center mt-8 pt-6 border-t border-gray-200">
-  <p className="text-gray-500 text-sm">
-    Built by{" "}
-    <a 
-      href="https://www.linkedin.com/in/achraf-lachgar/" 
-      target="_blank" 
-      rel="noopener noreferrer"
-      className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold transition-colors hover:underline"
-    >
-      achraflachgar.me
-      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-        <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
-      </svg>
-    </a>
-  </p>
-</div>
+        <div className="text-center mt-8 pt-6 border-t border-gray-200">
+          <p className="text-gray-500 text-sm">
+            Built by{" "}
+            <a 
+              href="https://www.linkedin.com/in/achraf-lachgar/" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold transition-colors hover:underline"
+            >
+              achraflachgar.me
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+              </svg>
+            </a>
+          </p>
+        </div>
       </div>
     </div>
   );

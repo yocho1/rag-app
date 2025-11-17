@@ -1,106 +1,136 @@
 # backend/app.py
 import os, io, uuid
 from typing import List, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import chromadb
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from PyPDF2 import PdfReader
 from docx import Document
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 # Load env
 load_dotenv()
 CHROMA_DIR = os.getenv("CHROMA_DIR", "chroma_store")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is required for Gemini embeddings")
-
-# Configure Gemini
-import google.generativeai as genai
-genai.configure(api_key=GEMINI_API_KEY)
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
 
 # FastAPI app
-app = FastAPI(title="RAG Ingest + Query (Gemini Embeddings)")
+app = FastAPI(title="RAG Ingest + Query (Local Embeddings + Auth)")
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # change for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize Chroma (local persistent)
+# Initialize Chroma with LOCAL embeddings
 chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
 
-COLLECTION_NAME = "documents_gemini"  # Changed to avoid conflicts with old collection
+# Use sentence-transformers for local embeddings
+embedding_function = SentenceTransformerEmbeddingFunction()
+
+COLLECTION_NAME = "documents_local_auth"
+
 try:
-    collection = chroma_client.get_collection(COLLECTION_NAME)
+    collection = chroma_client.get_collection(
+        COLLECTION_NAME, 
+        embedding_function=embedding_function
+    )
 except Exception:
     collection = chroma_client.create_collection(
         name=COLLECTION_NAME,
-        # We'll manually provide embeddings, so no need for Chroma's embedding function
+        embedding_function=embedding_function
     )
 
-# ---------- Gemini Embedding Helper ----------
-def get_gemini_embeddings(texts: List[str]) -> List[List[float]]:
-    """
-    Get embeddings from Gemini embedding model
-    """
-    try:
-        # Use the embedding model
-        embedding_model = "models/embedding-001"
-        
-        # Gemini has limits on batch size and total tokens, so we'll process in smaller batches
-        batch_size = 50  # Adjust based on your needs
-        all_embeddings = []
-        
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            
-            # Get embeddings for the batch
-            result = genai.embed_content(
-                model=embedding_model,
-                content=batch,
-                task_type="retrieval_document"  # Use "retrieval_query" for query embeddings
-            )
-            
-            batch_embeddings = result['embedding']
-            all_embeddings.extend(batch_embeddings)
-        
-        return all_embeddings
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gemini embedding error: {str(e)}")
+# JWT implementation
+security = HTTPBearer()
 
-def get_gemini_query_embedding(query: str) -> List[float]:
-    """
-    Get embedding for a single query using Gemini
-    """
+class TokenData(BaseModel):
+    user_id: str
+    username: str
+
+def create_jwt_token(user_id: str, username: str) -> str:
+    """Create JWT token"""
     try:
-        embedding_model = "models/embedding-001"
-        
-        result = genai.embed_content(
-            model=embedding_model,
-            content=query,
-            task_type="retrieval_query"  # Specific task type for queries
+        import jwt
+        expiration = datetime.utcnow() + timedelta(hours=24)
+        payload = {
+            "user_id": user_id,
+            "username": username,
+            "exp": expiration
+        }
+        return jwt.encode(payload, JWT_SECRET_KEY, algorithm="HS256")
+    except ImportError:
+        # Fallback without JWT
+        return f"simple-token-{user_id}-{username}"
+
+def verify_jwt_token(token: str) -> TokenData:
+    """Verify JWT token"""
+    try:
+        import jwt
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
+        return TokenData(
+            user_id=payload.get("user_id", "unknown"),
+            username=payload.get("username", "unknown")
         )
-        
-        return result['embedding']
-        
+    except ImportError:
+        # Fallback for simple tokens
+        if token.startswith("simple-token-"):
+            parts = token.split("-")
+            if len(parts) >= 4:
+                return TokenData(user_id=parts[2], username=parts[3])
+        raise HTTPException(status_code=401, detail="Invalid token")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Gemini query embedding error: {str(e)}")
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-# ---------- Text Processing Helpers ----------
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> TokenData:
+    return verify_jwt_token(credentials.credentials)
+
+# Authentication routes
+class LoginRequest(BaseModel):
+    username: str
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str
+    user_id: str
+    username: str
+
+@app.post("/auth/login", response_model=LoginResponse)
+async def login(login_data: LoginRequest):
+    user_id = str(uuid.uuid4())
+    token = create_jwt_token(user_id, login_data.username)
+    
+    return LoginResponse(
+        access_token=token,
+        token_type="bearer",
+        user_id=user_id,
+        username=login_data.username
+    )
+
+@app.get("/auth/me")
+async def get_current_user_info(current_user: TokenData = Depends(get_current_user)):
+    return current_user
+
+# Test route
+@app.get("/test")
+async def test():
+    return {"message": "Server is working!", "status": "OK"}
+
+@app.get("/")
+async def root():
+    return {"message": "RAG API with Auth - Server is running!", "status": "running"}
+
+# Text processing functions
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     reader = PdfReader(io.BytesIO(file_bytes))
-    texts = []
-    for p in reader.pages:
-        txt = p.extract_text()
-        if txt:
-            texts.append(txt)
-    return "\n".join(texts)
+    return "\n".join([p.extract_text() for p in reader.pages if p.extract_text()])
 
 def extract_text_from_docx(file_bytes: bytes) -> str:
     doc = Document(io.BytesIO(file_bytes))
@@ -112,17 +142,12 @@ def extract_text_from_file(filename: str, file_bytes: bytes) -> str:
         return extract_text_from_pdf(file_bytes)
     if fname.endswith(".docx"):
         return extract_text_from_docx(file_bytes)
-    # fallback plain text
     try:
         return file_bytes.decode("utf-8")
     except Exception:
         return file_bytes.decode("latin-1", errors="ignore")
 
 def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> List[str]:
-    """
-    Split text into chunks with overlap
-    Gemini embedding model has 2048 token limit, so we're safe with these chunk sizes
-    """
     text = text.replace("\r\n", "\n")
     chunks = []
     start = 0
@@ -133,24 +158,21 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> List[str
         if chunk:
             chunks.append(chunk)
         start = end - overlap
-        if start < 0:
-            start = 0
     return chunks
 
-# ---------- Pydantic Models ----------
+# Pydantic models
 class QueryIn(BaseModel):
     query: str
     top_k: Optional[int] = 4
 
-# ---------- Routes ----------
+# Protected routes - UPDATED for local embeddings
 @app.post("/ingest")
-async def ingest(file: UploadFile = File(...), namespace: Optional[str] = Form("default")):
-    """
-    Upload file -> extract -> chunk -> embed with Gemini -> store in Chroma
-    """
-    # Validate file size (optional)
+async def ingest(
+    file: UploadFile = File(...),
+    current_user: TokenData = Depends(get_current_user)
+):
     content = await file.read()
-    if len(content) > 50 * 1024 * 1024:  # 50MB limit
+    if len(content) > 50 * 1024 * 1024:
         return {"success": False, "error": "File too large. Maximum size is 50MB."}
 
     text = extract_text_from_file(file.filename, content)
@@ -159,46 +181,47 @@ async def ingest(file: UploadFile = File(...), namespace: Optional[str] = Form("
 
     chunks = chunk_text(text)
     
-    try:
-        # Get embeddings from Gemini
-        embeddings = get_gemini_embeddings(chunks)
-    except Exception as e:
-        return {"success": False, "error": f"Embedding failed: {str(e)}"}
-
+    # No need for manual embeddings - ChromaDB handles it automatically
+    user_namespace = f"user_{current_user.user_id}"
+    
     ids = [str(uuid.uuid4()) for _ in chunks]
-    metadatas = [{"source": file.filename, "chunk_index": i, "namespace": namespace} for i in range(len(chunks))]
-    documents = chunks
+    metadatas = [{
+        "source": file.filename, 
+        "chunk_index": i, 
+        "namespace": user_namespace,
+        "user_id": current_user.user_id,
+        "username": current_user.username
+    } for i in range(len(chunks))]
 
-    # Add to collection
+    # ChromaDB will automatically generate embeddings using the SentenceTransformer
     collection.add(
         ids=ids,
-        documents=documents,
-        metadatas=metadatas,
-        embeddings=embeddings
+        documents=chunks,
+        metadatas=metadatas
+        # No embeddings parameter needed - ChromaDB generates them automatically
     )
     
     return {
         "success": True, 
         "ingested_chunks": len(chunks), 
         "file": file.filename,
-        "embedding_model": "Gemini embedding-001"
+        "user_id": current_user.user_id
     }
 
 @app.post("/query")
-async def query(q: QueryIn):
-    query_text = q.query
-    top_k = q.top_k or 4
-
-    try:
-        # Get query embedding from Gemini
-        q_emb = get_gemini_query_embedding(query_text)
-    except Exception as e:
-        return {"success": False, "error": f"Query embedding failed: {str(e)}"}
-
-    # Query chroma
+async def query(
+    q: QueryIn,
+    current_user: TokenData = Depends(get_current_user)
+):
+    # No need for manual query embedding - ChromaDB handles it automatically
+    
+    user_filter = {"user_id": current_user.user_id}
+    
+    # ChromaDB will automatically embed the query using the same model
     results = collection.query(
-        query_embeddings=[q_emb],
-        n_results=top_k,
+        query_texts=[q.query],  # Use query_texts instead of query_embeddings
+        n_results=q.top_k or 4,
+        where=user_filter,
         include=['documents', 'metadatas', 'distances']
     )
 
@@ -210,74 +233,76 @@ async def query(q: QueryIn):
 
     context = "\n\n---\n\n".join([d["text"] for d in docs])
 
-    # Generate answer using Gemini
-    try:
-        # Use Gemini for final answer generation
-        selected_model = "models/gemini-2.0-flash"
-        model = genai.GenerativeModel(selected_model)
-        
-        prompt = f"""Based on the following context, please answer the question concisely and accurately.
-
-Context:
-{context}
-
-Question: {query_text}
-
-If the context doesn't contain relevant information, say so clearly.
-
-Answer:"""
-        
-        resp = model.generate_content(prompt)
-        answer = resp.text.strip()
-            
-    except Exception as e:
-        # Fallback to a different model if the first one fails
-        try:
-            selected_model = "models/gemini-2.0-flash-lite"
-            model = genai.GenerativeModel(selected_model)
-            resp = model.generate_content(prompt)
-            answer = resp.text.strip()
-        except Exception as e2:
-            answer = f"(Gemini generation error) {str(e2)}"
-
+    # For the answer generation, we can still use Gemini if you want, or use a local model
+    # Let's use a simple template-based answer for now to avoid API limits
+    if docs:
+        answer = f"Based on your documents, here's what I found:\n\n{context}\n\nThis information is retrieved from your uploaded documents."
+    else:
+        answer = "I couldn't find any relevant information in your uploaded documents to answer this question. Please make sure you've uploaded relevant documents first."
+    
     return {
-        "query": query_text, 
-        "top_k": top_k, 
+        "query": q.query, 
+        "top_k": q.top_k or 4,
         "documents": docs, 
         "answer": answer,
-        "embedding_model": "Gemini embedding-001"
+        "user_id": current_user.user_id
     }
 
-@app.get("/collections")
-def list_collections():
-    cols = chroma_client.list_collections()
-    return {"collections": [{"name": c.name} for c in cols]}
-
-@app.get("/collection_info")
-def collection_info():
-    """Get information about the current collection"""
-    count = collection.count()
-    return {
-        "collection_name": COLLECTION_NAME,
-        "document_count": count,
-        "embedding_model": "Gemini embedding-001"
-    }
-
-@app.post("/flush")
-def flush_data():
-    """Clear all data from the collection"""
+@app.get("/user/documents")
+async def get_user_documents(current_user: TokenData = Depends(get_current_user)):
+    """Get all documents for the current user"""
     try:
-        chroma_client.delete_collection(COLLECTION_NAME)
-        global collection
-        collection = chroma_client.create_collection(name=COLLECTION_NAME)
-        return {"success": True, "message": "Collection flushed successfully"}
+        user_filter = {"user_id": current_user.user_id}
+        results = collection.get(where=user_filter)
+        
+        documents_by_source = {}
+        for i, metadata in enumerate(results["metadatas"]):
+            source = metadata.get("source", "Unknown")
+            if source not in documents_by_source:
+                documents_by_source[source] = {
+                    "chunks": 0,
+                    "namespace": metadata.get("namespace", ""),
+                    "uploaded_by": metadata.get("username", "")
+                }
+            documents_by_source[source]["chunks"] += 1
+        
+        return {
+            "user_id": current_user.user_id,
+            "username": current_user.username,
+            "total_documents": len(documents_by_source),
+            "total_chunks": len(results["ids"]),
+            "documents": documents_by_source
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
-@app.get("/")
-async def root():
-    return {"message": "RAG API with Gemini Embeddings", "status": "running"}
+@app.post("/user/flush")
+async def flush_user_data(current_user: TokenData = Depends(get_current_user)):
+    """Clear all data for the current user"""
+    try:
+        user_filter = {"user_id": current_user.user_id}
+        collection.delete(where=user_filter)
+        return {
+            "success": True, 
+            "message": f"All documents for user {current_user.username} flushed successfully",
+            "user_id": current_user.user_id
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# Add this right after your FastAPI app initialization
+@app.get("/debug/routes")
+async def debug_routes():
+    routes = []
+    for route in app.routes:
+        route_info = {
+            "path": getattr(route, "path", None),
+            "methods": getattr(route, "methods", None),
+            "name": getattr(route, "name", None)
+        }
+        routes.append(route_info)
+    return {"routes": routes}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=5005)
