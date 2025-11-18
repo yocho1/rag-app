@@ -14,6 +14,16 @@ export default function App() {
   const [loginData, setLoginData] = useState({ username: "" });
   const [userDocuments, setUserDocuments] = useState(null);
   const [showLogin, setShowLogin] = useState(true);
+  
+  // 🆕 PAGINATION STATE
+  const [pagination, setPagination] = useState({
+    current_page: 1,
+    page_size: 10,
+    total_results: 0,
+    total_pages: 1,
+    has_next: false,
+    has_previous: false
+  });
 
   // Check for existing token on app start
   useEffect(() => {
@@ -75,6 +85,14 @@ export default function App() {
     setUserDocuments(null);
     setAnswer(null);
     setDocs([]);
+    setPagination({
+      current_page: 1,
+      page_size: 10,
+      total_results: 0,
+      total_pages: 1,
+      has_next: false,
+      has_previous: false
+    });
   };
 
   const upload = async (e) => {
@@ -85,7 +103,6 @@ export default function App() {
     setIngestStatus("Uploading...");
     const form = new FormData();
     form.append("file", file);
-    form.append("namespace", "main");
     
     try {
       const res = await axios.post(`${API}/ingest`, form, {
@@ -104,31 +121,85 @@ export default function App() {
     }
   };
 
-const ask = async () => {
-  if (!query.trim()) return;
-  if (!user) return alert("Please login first");
-  
-  setLoading(true);
-  setAnswer(null);
-  setDocs([]);
-  try {
-    const res = await axios.post(`${API}/query`, { query, top_k: 4 });
-    console.log("Full response:", res); // Add this line
-    console.log("Response data:", res.data); // Add this line
-    setAnswer(res.data.answer);
-    setDocs(res.data.documents || []);
-  } catch (err) {
-    console.error("Error details:", err); // Add this line
-    if (err.response?.status === 401) {
-      logout();
-      alert("Session expired. Please login again.");
-    } else {
-      setAnswer("❌ Error: " + (err?.response?.data?.error || err.message));
+  // 🆕 ENHANCED ASK FUNCTION WITH PAGINATION
+  const ask = async (page = 1) => {
+    if (!query.trim()) return;
+    if (!user) return alert("Please login first");
+    
+    setLoading(true);
+    setAnswer(null);
+    setDocs([]);
+    try {
+      const res = await axios.post(`${API}/query`, { 
+        query, 
+        top_k: 50,
+        page: page,
+        page_size: pagination.page_size
+      });
+      
+      console.log("Full response:", res.data);
+      setAnswer(res.data.answer);
+      setDocs(res.data.documents || []);
+      
+      // 🆕 Set pagination info
+      if (res.data.pagination) {
+        setPagination(res.data.pagination);
+      }
+    } catch (err) {
+      console.error("Error details:", err);
+      if (err.response?.status === 401) {
+        logout();
+        alert("Session expired. Please login again.");
+      } else {
+        setAnswer("❌ Error: " + (err?.response?.data?.error || err.message));
+      }
+    } finally {
+      setLoading(false);
     }
-  } finally {
-    setLoading(false);
-  }
-}
+  };
+
+  // 🆕 PAGINATION HANDLERS
+  const handleNextPage = () => {
+    if (pagination.has_next) {
+      ask(pagination.current_page + 1);
+    }
+  };
+
+  const handlePreviousPage = () => {
+    if (pagination.has_previous) {
+      ask(pagination.current_page - 1);
+    }
+  };
+
+  // 🆕 SOURCE ACTIONS
+  const downloadOriginalDocument = async (documentId, filename) => {
+    try {
+      const response = await axios.get(`${API}/api/documents/${documentId}/download`, {
+        responseType: 'blob'
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      alert("Failed to download document: " + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const viewDocumentInfo = async (documentId) => {
+    try {
+      const response = await axios.get(`${API}/api/documents/${documentId}`);
+      alert(`Document Info:\n\nFilename: ${response.data.filename}\nUploaded: ${new Date(response.data.upload_time).toLocaleString()}\nChunks: ${response.data.total_chunks}\nMethod: ${response.data.chunking_method}`);
+    } catch (error) {
+      alert("Failed to get document info: " + (error.response?.data?.detail || error.message));
+    }
+  };
 
   const flushUserData = async () => {
     if (!user) return;
@@ -140,6 +211,14 @@ const ask = async () => {
       setUserDocuments(null);
       setAnswer(null);
       setDocs([]);
+      setPagination({
+        current_page: 1,
+        page_size: 10,
+        total_results: 0,
+        total_pages: 1,
+        has_next: false,
+        has_previous: false
+      });
     } catch (err) {
       alert("Failed to flush data: " + (err?.response?.data?.error || err.message));
     }
@@ -150,6 +229,32 @@ const ask = async () => {
       ask();
     }
   };
+
+  // 🆕 PAGINATION COMPONENT
+  const PaginationControls = () => (
+    <div className="pagination-controls">
+      <button 
+        onClick={handlePreviousPage}
+        disabled={!pagination.has_previous || loading}
+        className="pagination-btn"
+      >
+        ← Previous
+      </button>
+      
+      <span className="page-info">
+        Page {pagination.current_page} of {pagination.total_pages} 
+        {pagination.total_results > 0 && ` (${pagination.total_results} total results)`}
+      </span>
+      
+      <button 
+        onClick={handleNextPage}
+        disabled={!pagination.has_next || loading}
+        className="pagination-btn"
+      >
+        Next →
+      </button>
+    </div>
+  );
 
   // Login Form
   if (showLogin) {
@@ -198,7 +303,7 @@ const ask = async () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 p-4 md:p-6">
       {/* Header */}
-      <div className="max-w-6xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
@@ -225,9 +330,9 @@ const ask = async () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
           {/* Left Column - Input Section */}
-          <div className="space-y-6">
+          <div className="xl:col-span-1 space-y-6">
             {/* User Documents Card */}
             <div className="bg-white rounded-2xl shadow-xl p-6 border border-gray-100">
               <div className="flex items-center justify-between mb-4">
@@ -247,20 +352,29 @@ const ask = async () => {
                 </button>
               </div>
 
-              <div className="max-h-60 overflow-y-auto">
-                {userDocuments?.documents ? (
-                  Object.entries(userDocuments.documents).map(([source, info]) => (
-                    <div key={source} className="p-3 border border-gray-200 rounded-lg mb-2 bg-gray-50">
-                      <div className="flex justify-between items-center">
-                        <span className="font-medium text-sm text-gray-800 truncate">{source}</span>
-                        <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                          {info.chunks} chunks
+              <div className="max-h-80 overflow-y-auto">
+                {userDocuments?.documents && userDocuments.documents.length > 0 ? (
+                  userDocuments.documents.map((doc, index) => (
+                    <div key={doc.document_id || index} className="p-3 border border-gray-200 rounded-lg mb-2 bg-gray-50 hover:bg-gray-100 transition-colors">
+                      <div className="flex justify-between items-start mb-1">
+                        <span className="font-medium text-sm text-gray-800 truncate flex-1 mr-2">
+                          {doc.filename}
                         </span>
+                        <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded whitespace-nowrap">
+                          {doc.chunks} chunks
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-500 flex justify-between">
+                        <span>By {doc.uploaded_by}</span>
+                        <span>{new Date(doc.upload_time).toLocaleDateString()}</span>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <div className="text-center py-4 text-gray-400">
+                  <div className="text-center py-8 text-gray-400">
+                    <svg className="w-12 h-12 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
                     <p>No documents uploaded yet</p>
                   </div>
                 )}
@@ -343,7 +457,7 @@ const ask = async () => {
                     disabled={loading}
                   />
                   <button 
-                    onClick={ask} 
+                    onClick={() => ask(1)} // Always start from page 1 for new queries
                     disabled={loading || !query.trim()}
                     className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white p-2 rounded-lg hover:from-emerald-600 hover:to-emerald-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -368,9 +482,9 @@ const ask = async () => {
           </div>
 
           {/* Right Column - Results Section */}
-          <div className="space-y-6">
+          <div className="xl:col-span-2 space-y-6">
             {/* Answer Card */}
-            <div className="bg-white rounded-2xl shadow-xl p-6 border border-gray-100 h-fit">
+            <div className="bg-white rounded-2xl shadow-xl p-6 border border-gray-100">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-purple-100 rounded-lg">
                   <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -400,48 +514,99 @@ const ask = async () => {
               </div>
             </div>
 
-            {/* Retrieved Documents Card */}
+            {/* Retrieved Sources Card with Pagination */}
             <div className="bg-white rounded-2xl shadow-xl p-6 border border-gray-100">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="p-2 bg-orange-100 rounded-lg">
-                  <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                  </svg>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-orange-100 rounded-lg">
+                    <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-semibold text-gray-800">Retrieved Sources</h2>
+                    {pagination.total_results > 0 && (
+                      <p className="text-sm text-gray-600">
+                        Showing {docs.length} of {pagination.total_results} sources
+                      </p>
+                    )}
+                  </div>
                 </div>
-                <h2 className="text-xl font-semibold text-gray-800">Retrieved Sources</h2>
                 {docs.length > 0 && (
-                  <span className="bg-orange-100 text-orange-800 text-sm px-2 py-1 rounded-full">
-                    {docs.length} found
+                  <span className="bg-orange-100 text-orange-800 text-sm px-3 py-1 rounded-full font-medium">
+                    {docs.length} on this page
                   </span>
                 )}
               </div>
 
-              <div className="space-y-4 max-h-96 overflow-y-auto">
+              {/* Pagination Controls */}
+              {pagination.total_pages > 1 && (
+                <div className="mb-6">
+                  <PaginationControls />
+                </div>
+              )}
+
+              <div className="space-y-4">
                 {docs.length === 0 ? (
                   <div className="text-center py-8 text-gray-400">
                     <svg className="w-12 h-12 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                     <p>No sources retrieved yet</p>
+                    <p className="text-sm mt-2">Ask a question to search through your documents</p>
                   </div>
                 ) : (
-                  docs.map((d, i) => (
-                    <div key={i} className="p-4 border border-gray-200 rounded-xl hover:border-blue-300 transition-colors bg-white">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-1 rounded">
-                          {d.metadata?.source || "Unknown source"}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          Relevance: {(1 - (d.distance || 0)).toFixed(3)}
-                        </span>
+                  docs.map((doc, i) => (
+                    <div key={doc.chunk_id || i} className="p-4 border border-gray-200 rounded-xl hover:border-blue-300 transition-colors bg-white group">
+                      {/* Source Header with Actions */}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-blue-600 bg-blue-50 px-2 py-1 rounded">
+                            📄 {doc.metadata?.source || "Unknown source"}
+                          </span>
+                          <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">
+                            {doc.relevance_score}% relevant
+                          </span>
+                        </div>
+                        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => viewDocumentInfo(doc.metadata?.document_id)}
+                            className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded hover:bg-gray-200 transition-colors"
+                            title="View document info"
+                          >
+                            ℹ️ Info
+                          </button>
+                          <button
+                            onClick={() => downloadOriginalDocument(doc.metadata?.document_id, doc.metadata?.source)}
+                            className="text-xs bg-blue-100 text-blue-600 px-2 py-1 rounded hover:bg-blue-200 transition-colors"
+                            title="Download original document"
+                          >
+                            ⬇️ Download
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-sm text-gray-700 leading-relaxed line-clamp-3">
-                        {d.text}
+                      
+                      {/* Source Content */}
+                      <p className="text-sm text-gray-700 leading-relaxed mb-2">
+                        {doc.text}
                       </p>
+                      
+                      {/* Source Footer */}
+                      <div className="flex justify-between items-center text-xs text-gray-500">
+                        <span>Chunk #{doc.chunk_number} • Uploaded by {doc.metadata?.username}</span>
+                        <span>{doc.upload_time ? new Date(doc.upload_time).toLocaleString() : ''}</span>
+                      </div>
                     </div>
                   ))
                 )}
               </div>
+
+              {/* Pagination Controls at Bottom */}
+              {pagination.total_pages > 1 && (
+                <div className="mt-6">
+                  <PaginationControls />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -464,6 +629,55 @@ const ask = async () => {
           </p>
         </div>
       </div>
+
+      {/* 🆕 ADD THESE STYLES */}
+      <style jsx>{`
+        .pagination-controls {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 1rem;
+          padding: 1rem;
+          background: #f8fafc;
+          border-radius: 0.5rem;
+          border: 1px solid #e2e8f0;
+        }
+        
+        .pagination-btn {
+          padding: 0.5rem 1rem;
+          border: 1px solid #d1d5db;
+          border-radius: 0.375rem;
+          background: white;
+          color: #374151;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        
+        .pagination-btn:hover:not(:disabled) {
+          background: #3b82f6;
+          color: white;
+          border-color: #3b82f6;
+        }
+        
+        .pagination-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        
+        .page-info {
+          font-weight: 600;
+          color: #4b5563;
+          font-size: 0.875rem;
+        }
+        
+        @media (max-width: 768px) {
+          .pagination-controls {
+            flex-direction: column;
+            gap: 0.5rem;
+          }
+        }
+      `}</style>
     </div>
   );
 }
