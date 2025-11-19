@@ -14,6 +14,15 @@ from datetime import datetime, timedelta
 import re
 import nltk
 
+
+# Download NLTK data on startup
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    print("Downloading NLTK punkt data...")
+    nltk.download('punkt', quiet=True)
+    print("NLTK punkt data downloaded successfully!")
+
 # Load env
 load_dotenv()
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
