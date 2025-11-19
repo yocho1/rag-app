@@ -1,27 +1,40 @@
-# 🧠 Smart Document Assistant - RAG Application
+RAG Document Assistant 🤖
+A powerful Retrieval-Augmented Generation (RAG) application that allows you to upload documents and ask questions about their content. Built with FastAPI, React, and Pinecone vector database.
 
-A full-stack Retrieval-Augmented Generation (RAG) application that allows you to upload documents and ask questions about their content. Powered by React, FastAPI, ChromaDB, and Google Gemini AI.
+https://img.shields.io/badge/Live-Demo-brightgreen https://img.shields.io/badge/FastAPI-005571?style=for-square&logo=fastapi https://img.shields.io/badge/React-20232A?style=for-square&logo=react https://img.shields.io/badge/Pinecone-430098?style=for-square&logo=pinecone
 
-![RAG Architecture](https://img.shields.io/badge/Architecture-RAG-blue)
-![React](https://img.shields.io/badge/Frontend-React-61dafb)
-![FastAPI](https://img.shields.io/badge/Backend-FastAPI-009688)
-![ChromaDB](https://img.shields.io/badge/VectorDB-ChromaDB-green)
+🚀 Live Demo
+Frontend: https://rag-app-dusky.vercel.app/
 
-## 🎯 Overview
+Backend API: Coming soon (Deploying to PythonAnywhere)
 
-This application implements a complete RAG pipeline:
+✨ Features : 
 
-1. **CHUNK** - Cut documents into manageable slices (~800 characters)
-2. **EMBED** - Convert each slice into semantic vector fingerprints
-3. **STORE** - Save vectors and text in ChromaDB vector database
-4. **RETRIEVE** - Find relevant content using semantic search
-5. **GENERATE** - Create AI-powered answers using retrieved context
+📄 Document Upload - Support for PDF, DOCX, and text files
+🔍 Smart Search - Semantic search using sentence transformers
+🧠 AI-Powered Q&A - Ask questions about your uploaded documents
+🔐 User Authentication - JWT-based secure authentication
+📱 Responsive Design - Works on desktop and mobile devices
+⚡ Fast Performance - Built with FastAPI and React for optimal speed
 
-## ✨ Features
+🛠️ Tech Stack
 
-- **📄 Multi-format Support**: Upload PDF, DOCX, and TXT files
-- **🔍 Semantic Search**: Find relevant content using meaning, not just keywords
-- **🤖 AI-Powered Answers**: Get contextual responses using Google Gemini
-- **💾 Vector Database**: Efficient storage and retrieval with ChromaDB
-- **🎨 Beautiful UI**: Modern, responsive interface with Tailwind CSS
-- **⚡ Real-time Processing**: Instant ingestion and querying
+Frontend : 
+React - Modern UI framework
+Vite - Fast build tool
+Tailwind CSS - Utility-first CSS framework
+Axios - HTTP client for API calls
+
+Backend : 
+FastAPI - Modern Python web framework
+Pinecone - Vector database for semantic search
+Sentence Transformers - Text embedding generation
+JWT - Authentication tokens
+PyPDF2 & python-docx - Document text extraction
+
+📦 Installation
+
+Prerequisites:
+Python 3.8+
+Node.js 16+
+Pinecone account (for vector database)
