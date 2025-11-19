@@ -1,7 +1,8 @@
+import os
 import multiprocessing
 
 # Server socket
-bind = "0.0.0.0:${PORT:-8000}"
+bind = f"0.0.0.0:{os.environ.get('PORT', '8000')}"
 backlog = 2048
 
 # Worker processes
@@ -18,15 +19,3 @@ loglevel = "info"
 
 # Process naming
 proc_name = "rag_backend"
-
-# Server mechanics
-daemon = False
-pidfile = None
-umask = 0
-user = None
-group = None
-tmp_upload_dir = None
-
-# SSL (optional)
-# keyfile = None
-# certfile = None
