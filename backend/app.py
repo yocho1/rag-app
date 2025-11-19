@@ -41,12 +41,14 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://rag-app-dusky.vercel.app",
+        "https://your-pythonanywhere-username.pythonanywhere.com",
         "http://localhost:3000",
         "http://localhost:5173"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
 
 
 #  NEW PINEcone INITIALIZATION

@@ -9,4 +9,3 @@ sentence-transformers==2.2.2
 torch==2.1.1 --index-url https://download.pytorch.org/whl/cpu
 nltk==3.8.1
 pinecone-client==3.0.1
-gunicorn==21.2.0
